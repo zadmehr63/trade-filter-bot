@@ -1,21 +1,26 @@
 """
-ربات تلگرام «فیلتر چارت» برای گروه ترید
+ربات تلگرام «فیلتر چارت» برای گروه و کانال ترید
 python-telegram-bot >= 20
 
 جریان کار:
-1. عضو گروه عکس چارت را می‌فرستد.
-2. ربات همان عکس را (با نام فرستنده و کپشن اصلی) دوباره ارسال می‌کند، کیبورد اینلاین را زیرش می‌گذارد
+1. عضو گروه (یا ادمین کانال) عکس چارت را می‌فرستد.
+2. ربات همان عکس را (با کپشن اصلی) دوباره ارسال می‌کند، کیبورد اینلاین را زیرش می‌گذارد
    و پیام اصلی را پاک می‌کند. (ربات نمی‌تواند پیام دیگران را ویرایش کند و کیبورد هم نمی‌تواند به پیام
    دیگران اضافه شود؛ برای همین باید عکس را دوباره بفرستد.)
-3. فقط فرستنده‌ی عکس می‌تواند دکمه‌ها را بزند؛ هر کلیک وضعیت فیلتر را بین ✅ و 🔴 عوض می‌کند.
+3. در گروه فقط فرستنده‌ی عکس می‌تواند دکمه‌ها را بزند.
+   در کانال فرستنده معلوم نیست؛ اولین «ادمین کانال» که دکمه‌ای بزند صاحب چارت می‌شود
+   و از آن به بعد فقط خودش می‌تواند آن را تغییر دهد.
 4. با «ثبت نهایی» کپشن همان عکس ویرایش می‌شود و خلاصه‌ی فیلترها نمایش داده می‌شود.
+   با «فقط توضیح» فقط کیبورد برداشته می‌شود.
 
 وضعیت دکمه‌ها داخل callback_data هر دکمه است و با ری‌استارت از بین نمی‌رود.
 
 آمار:
 - هر بار که «ثبت نهایی» یا «فقط توضیح» زده شود، نتیجه در فایل stats.db (SQLite) ذخیره می‌شود.
-- دستورها: «آمار» (انتخاب بازه)، «آمار روزانه»، «آمار هفتگی»، «آمار ماهانه»
+- در گروه: «آمار» (انتخاب بازه)، «آمار روزانه»، «آمار هفتگی»، «آمار ماهانه»
   یا /stats  /daily  /weekly  /monthly
+- در پیام خصوصی با ربات (فقط برای STATS_ADMIN_IDS): آمار همه‌ی گروه‌ها و کانال‌ها.
+- در کانال آمار نمایش داده نمی‌شود (چون همه‌ی مشترکین می‌بینند).
 - فقط چارت‌های «ثبت نهایی»شده شمرده می‌شوند، نه «فقط توضیح».
 - بازه‌ها بر اساس وقت تهران است: روز از ۰۰:۰۰، هفته از شنبه، ماه بر اساس ماه شمسی.
 """
@@ -70,17 +75,19 @@ OFF_MARK = "🔴"  # وضعیت منفی / پیش‌فرض
 SUBMIT_TEXT = "📌 ثبت نهایی"
 SKIP_TEXT = "💬 فقط توضیح"  # بدون فیلتر: فقط کیبورد برداشته می‌شود
 
-# اگر True باشد پیام اصلی عضو پاک می‌شود (ربات باید ادمین با مجوز حذف پیام باشد).
+# اگر True باشد پیام اصلی پاک می‌شود (ربات باید ادمین با مجوز حذف پیام باشد).
 DELETE_ORIGINAL = True
 
-# اگر بخواهید ربات فقط در گروه‌های مشخص کار کند: آیدی‌ها را با کاما در این متغیر محیطی بگذارید
+# اگر بخواهید ربات فقط در گروه‌ها/کانال‌های مشخص کار کند: آیدی‌ها را با کاما در این متغیر محیطی بگذارید
 # مثال: ALLOWED_CHAT_IDS=-1001234567890,-1009876543210   (خالی = همه‌ی چت‌ها)
+# آیدی کانال هم با همین قالب (-100...) است.
 ALLOWED_CHAT_IDS = {
     int(x) for x in os.environ.get("ALLOWED_CHAT_IDS", "").split(",") if x.strip()
 }
 
-# فقط این کاربرها می‌توانند آمار بگیرند (آیدی عددی تلگرام، با کاما جدا شود). خالی = همه‌ی اعضا.
+# فقط این کاربرها می‌توانند آمار بگیرند (آیدی عددی تلگرام، با کاما جدا شود). خالی = همه‌ی اعضای گروه.
 # آیدی خودتان را با دستور /myid از ربات بگیرید. مثال: STATS_ADMIN_IDS=123456789
+# آمار خصوصی (در پیام مستقیم به ربات) فقط وقتی کار می‌کند که این لیست پر باشد.
 STATS_ADMIN_IDS = {
     int(x) for x in os.environ.get("STATS_ADMIN_IDS", "").split(",") if x.strip()
 }
@@ -96,7 +103,8 @@ DB_PATH = os.environ.get("STATS_DB") or os.path.join(
 # وقت تهران (از ۱۴۰۱ ساعت تابستانی لغو شده؛ ثابت +۳:۳۰)
 TEHRAN = timezone(timedelta(hours=3, minutes=30))
 
-MAX_PEOPLE_SHOWN = 30  # حداکثر تعداد نفرات در لیست آمار
+MAX_PEOPLE_SHOWN = 30  # حداکثر تعداد نفرات در آمار یک گروه
+MAX_PEOPLE_PRIVATE = 15  # حداکثر تعداد نفرات برای هر گروه/کانال در آمار خصوصی
 
 # ----------------------------------------------------------------------------
 # توابع کمکی
@@ -105,7 +113,7 @@ MAX_PEOPLE_SHOWN = 30  # حداکثر تعداد نفرات در لیست آما
 _FA_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
 
 
-def fa(n: int) -> str:
+def fa(n) -> str:
     """عدد را با ارقام فارسی برمی‌گرداند."""
     return str(n).translate(_FA_DIGITS)
 
@@ -114,7 +122,12 @@ def is_on(mask: int, filter_id: int) -> bool:
     return bool((mask >> filter_id) & 1)
 
 
+def count_positives(mask: int) -> int:
+    return sum(1 for f in FILTERS if is_on(mask, f["id"]))
+
+
 def build_keyboard(owner_id: int, mask: int) -> InlineKeyboardMarkup:
+    """owner_id=0 یعنی چارت کانال که هنوز صاحب ندارد."""
     buttons = []
     for f in FILTERS:
         mark = ON_MARK if is_on(mask, f["id"]) else OFF_MARK
@@ -234,37 +247,42 @@ def init_db() -> None:
                    status     TEXT NOT NULL,      -- final | skipped
                    positives  INTEGER,
                    done_at    INTEGER NOT NULL,   -- زمان یونیکس (UTC)
+                   chat_title TEXT,
                    PRIMARY KEY (chat_id, message_id)
                )"""
         )
+        # دیتابیس نسخه‌ی قبلی (بدون chat_title) را بدون از دست رفتن داده ارتقا می‌دهد
+        cols = [r[1] for r in db.execute("PRAGMA table_info(charts)")]
+        if "chat_title" not in cols:
+            db.execute("ALTER TABLE charts ADD COLUMN chat_title TEXT")
         db.execute(
             "CREATE INDEX IF NOT EXISTS idx_charts_done ON charts (chat_id, status, done_at)"
         )
 
 
-def record_result(chat_id, message_id, user_id, user_name, status, positives=None) -> None:
+def record_result(
+    chat_id, message_id, user_id, user_name, status, positives=None, chat_title=None
+) -> None:
     """ثبت نتیجه؛ خطای دیتابیس نباید کار ربات را خراب کند."""
     try:
         with db_conn() as db:
             db.execute(
                 "INSERT OR REPLACE INTO charts "
-                "(chat_id, message_id, user_id, user_name, status, positives, done_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (chat_id, message_id, user_id, user_name, status, positives, int(time.time())),
+                "(chat_id, message_id, user_id, user_name, status, positives, done_at, chat_title) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (chat_id, message_id, user_id, user_name, status, positives,
+                 int(time.time()), chat_title),
             )
     except sqlite3.Error:
         logger.exception("ذخیره‌ی آمار ناموفق بود")
 
 
-def count_positives(mask: int) -> int:
-    return sum(1 for f in FILTERS if is_on(mask, f["id"]))
-
-
 PERIOD_TITLES = {"day": "روزانه", "week": "هفتگی", "month": "ماهانه"}
 _MEDALS = ["🥇", "🥈", "🥉"]
+STATS_NOTE = "چارت‌هایی که «فقط توضیح» شده‌اند شمرده نمی‌شوند."
 
 
-def build_stats_text(chat_id: int, period: str) -> str:
+def _period_info(period: str):
     now = datetime.now(TEHRAN)
     start = period_start(period, now)
     if period == "day":
@@ -274,14 +292,17 @@ def build_stats_text(chat_id: int, period: str) -> str:
     else:
         jy, jm, _ = gregorian_to_jalali(start.year, start.month, start.day)
         label = f"این ماه ({PERSIAN_MONTHS[jm - 1]} {fa(jy)})"
+    return int(start.timestamp()), label
 
-    with db_conn() as db:
-        rows = db.execute(
-            "SELECT user_id, user_name FROM charts "
-            "WHERE chat_id = ? AND status = 'final' AND done_at >= ? "
-            "ORDER BY done_at",
-            (chat_id, int(start.timestamp())),
-        ).fetchall()
+
+def _people_lines(db, chat_id: int, start_ts: int, max_people: int):
+    """تعداد کل و سهم هر فرد در یک گروه/کانال."""
+    rows = db.execute(
+        "SELECT user_id, user_name FROM charts "
+        "WHERE chat_id = ? AND status = 'final' AND done_at >= ? "
+        "ORDER BY done_at",
+        (chat_id, start_ts),
+    ).fetchall()
 
     counts: Counter = Counter()
     names = {}
@@ -290,25 +311,54 @@ def build_stats_text(chat_id: int, period: str) -> str:
         names[uid] = name  # آخرین نام ثبت‌شده
 
     total = sum(counts.values())
-    lines = [f"📊 <b>آمار {PERIOD_TITLES[period]}</b>", label, ""]
-    lines.append(f"✅ چارت‌های ثبت نهایی‌شده: <b>{fa(total)}</b>")
-
+    lines = [f"✅ چارت‌های ثبت نهایی‌شده: <b>{fa(total)}</b>"]
     if total:
         lines += ["", "👥 سهم هر فرد:"]
         ranked = counts.most_common()
-        for i, (uid, c) in enumerate(ranked[:MAX_PEOPLE_SHOWN]):
+        for i, (uid, c) in enumerate(ranked[:max_people]):
             rank = _MEDALS[i] if i < len(_MEDALS) else f"{fa(i + 1)}."
             name = html.escape(names.get(uid) or "بدون‌نام")
             pct = round(c * 100 / total)
             lines.append(f"{rank} {name} — {fa(c)} چارت ({fa(pct)}٪)")
-        rest = ranked[MAX_PEOPLE_SHOWN:]
+        rest = ranked[max_people:]
         if rest:
             lines.append(f"و {fa(len(rest))} نفر دیگر ({fa(sum(c for _, c in rest))} چارت)")
-    else:
-        lines += ["", "هنوز چارتی ثبت نهایی نشده است."]
+    return total, lines
 
-    lines += ["", "چارت‌هایی که «فقط توضیح» شده‌اند شمرده نمی‌شوند."]
-    return "\n".join(lines)
+
+def build_stats_text(chat_id: int, period: str) -> str:
+    """آمار یک گروه یا کانال."""
+    start_ts, label = _period_info(period)
+    with db_conn() as db:
+        total, lines = _people_lines(db, chat_id, start_ts, MAX_PEOPLE_SHOWN)
+    out = [f"📊 <b>آمار {PERIOD_TITLES[period]}</b>", label, ""] + lines
+    if not total:
+        out += ["", "هنوز چارتی ثبت نهایی نشده است."]
+    out += ["", STATS_NOTE]
+    return "\n".join(out)
+
+
+def build_stats_text_all(period: str) -> str:
+    """آمار همه‌ی گروه‌ها و کانال‌ها (برای پیام خصوصی مدیر)."""
+    start_ts, label = _period_info(period)
+    out = [f"📊 <b>آمار {PERIOD_TITLES[period]}</b> (همه‌ی گروه‌ها و کانال‌ها)", label]
+    with db_conn() as db:
+        chats = db.execute(
+            "SELECT chat_id, MAX(chat_title) FROM charts "
+            "WHERE status = 'final' AND done_at >= ? "
+            "GROUP BY chat_id ORDER BY COUNT(*) DESC",
+            (start_ts,),
+        ).fetchall()
+        if not chats:
+            out += ["", "هنوز چارتی ثبت نهایی نشده است."]
+        for chat_id, title in chats:
+            _, lines = _people_lines(db, chat_id, start_ts, MAX_PEOPLE_PRIVATE)
+            out += ["", f"━━ <b>{html.escape(title or str(chat_id))}</b> ━━"] + lines
+    out += ["", STATS_NOTE]
+    text = "\n".join(out)
+    if len(text) > 4000:  # سقف پیام تلگرام ۴۰۹۶؛ روی مرز خط بریده می‌شود تا تگ‌ها نشکنند
+        text = text[: text.rfind("\n", 0, 3990)] + "\n…"
+    return text
 
 
 def stats_keyboard() -> InlineKeyboardMarkup:
@@ -325,31 +375,52 @@ def header_for(user) -> str:
     return f"👤 <b>{html.escape(user.full_name)}</b>"
 
 
+async def is_chat_admin(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int) -> bool:
+    """آیا کاربر ادمین (یا سازنده‌ی) این گروه/کانال است؟"""
+    try:
+        member = await context.bot.get_chat_member(chat_id, user_id)
+    except TelegramError:
+        logger.exception("بررسی ادمین بودن ناموفق بود")
+        return False
+    return member.status in ("administrator", "creator")
+
+
 # ----------------------------------------------------------------------------
-# هندلرها
+# هندلرهای چارت
 # ----------------------------------------------------------------------------
 
 
 async def on_chart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.effective_message
-    user = msg.from_user
-    # ادمین ناشناس / ارسال از طرف کانال: فرستنده‌ی واقعی مشخص نیست
-    if user is None or msg.sender_chat is not None:
-        return
+    is_channel = update.channel_post is not None
+
+    if is_channel:
+        # در کانال فرستنده‌ی فردی وجود ندارد؛ صاحب چارت بعداً مشخص می‌شود (owner_id = 0)
+        owner_id = 0
+        sig = getattr(msg, "author_signature", None)
+        header = f"✍️ <b>{html.escape(sig)}</b>" if sig else ""
+    else:
+        user = msg.from_user
+        # ارسال از طرف کانال یا ادمین ناشناس: فرستنده‌ی واقعی مشخص نیست
+        if user is None or msg.sender_chat is not None:
+            return
+        owner_id = user.id
+        header = header_for(user)
+
     if ALLOWED_CHAT_IDS and msg.chat_id not in ALLOWED_CHAT_IDS:
         return
 
-    caption = header_for(user)
+    caption = header
     if msg.caption:
-        caption += "\n" + msg.caption_html
+        caption = f"{header}\n{msg.caption_html}" if header else msg.caption_html
     if len(caption) > CAPTION_LIMIT:
-        caption = header_for(user)
+        caption = header
 
     kwargs = dict(
         chat_id=msg.chat_id,
-        caption=caption,
+        caption=caption or None,
         parse_mode=ParseMode.HTML,
-        reply_markup=build_keyboard(user.id, 0),
+        reply_markup=build_keyboard(owner_id, 0),
         message_thread_id=msg.message_thread_id if msg.is_topic_message else None,
     )
     try:
@@ -379,11 +450,22 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await query.answer()
         return
 
-    # فقط فرستنده‌ی چارت
-    if query.from_user.id != owner_id:
+    user = query.from_user
+    chat = query.message.chat
+    claimed = False
+
+    if owner_id == 0:
+        # چارت کانال که هنوز صاحب ندارد: اولین ادمینی که دکمه‌ای بزند صاحبش می‌شود
+        if not await is_chat_admin(context, chat.id, user.id):
+            await query.answer(
+                "فقط ادمین‌ها می‌توانند این دکمه‌ها را بزنند.", show_alert=True
+            )
+            return
+        owner_id = user.id
+        claimed = True
+    elif user.id != owner_id:
         await query.answer(
-            "فقط کسی که چارت را ارسال کرده می‌تواند این دکمه‌ها را تغییر دهد.",
-            show_alert=True,
+            "فقط صاحب این چارت می‌تواند این دکمه‌ها را تغییر دهد.", show_alert=True
         )
         return
 
@@ -396,18 +478,23 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         except BadRequest as e:
             if "not modified" not in str(e).lower():
                 raise
-        await query.answer()
+        await query.answer("این چارت به نام شما ثبت شد" if claimed else None)
 
     elif action == "ok":  # ثبت نهایی
         record_result(
-            query.message.chat.id, query.message.message_id, owner_id,
-            query.from_user.full_name, "final", count_positives(mask),
+            chat.id, query.message.message_id, owner_id, user.full_name,
+            "final", count_positives(mask), chat.title,
         )
-        summary = build_summary(mask)
-        base = getattr(query.message, "caption_html", None) or header_for(query.from_user)
-        caption = f"{base}\n\n{summary}"
+        tail = build_summary(mask)
+        is_channel = chat.type == "channel"
+        if is_channel:
+            tail += f"\n\n👤 ثبت‌کننده: <b>{html.escape(user.full_name)}</b>"
+        base = getattr(query.message, "caption_html", None)
+        if not base and not is_channel:
+            base = header_for(user)
+        caption = f"{base}\n\n{tail}" if base else tail
         if len(caption) > CAPTION_LIMIT:
-            caption = f"{header_for(query.from_user)}\n\n{summary}"
+            caption = tail if is_channel else f"{header_for(user)}\n\n{tail}"
         try:
             await query.edit_message_caption(
                 caption=caption, parse_mode=ParseMode.HTML, reply_markup=None
@@ -419,8 +506,8 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     elif action == "sk":  # فقط توضیح: کپشن دست‌نخورده می‌ماند و فقط کیبورد برداشته می‌شود
         record_result(
-            query.message.chat.id, query.message.message_id, owner_id,
-            query.from_user.full_name, "skipped",
+            chat.id, query.message.message_id, owner_id, user.full_name,
+            "skipped", None, chat.title,
         )
         try:
             await query.edit_message_reply_markup(reply_markup=None)
@@ -444,21 +531,38 @@ def _chat_allowed(chat_id: int) -> bool:
 
 
 def _stats_allowed(user) -> bool:
-    """فقط مدیران آمار (اگر تنظیم شده باشند)."""
+    """در گروه: فقط مدیران آمار (اگر تنظیم شده باشند)."""
     return not STATS_ADMIN_IDS or (user is not None and user.id in STATS_ADMIN_IDS)
 
 
+def _private_stats_allowed(user) -> bool:
+    """در پیام خصوصی: فقط مدیران آمار؛ اگر لیست خالی باشد هیچ‌کس."""
+    return bool(STATS_ADMIN_IDS) and user is not None and user.id in STATS_ADMIN_IDS
+
+
 async def _send_stats(msg, period) -> None:
-    if not _chat_allowed(msg.chat_id) or not _stats_allowed(msg.from_user):
+    chat = msg.chat
+    if chat.type == "private":
+        if not STATS_ADMIN_IDS:
+            await msg.reply_text(
+                "آمار خصوصی غیرفعال است. اول STATS_ADMIN_IDS را تنظیم کنید "
+                "(آیدی خودتان را با /myid می‌گیرید)."
+            )
+            return
+        if not _private_stats_allowed(msg.from_user):
+            return
+    elif not _chat_allowed(msg.chat_id) or not _stats_allowed(msg.from_user):
         return  # بی‌صدا نادیده گرفته می‌شود تا گروه شلوغ نشود
+
     if period is None:
         await msg.reply_text("آمار کدام بازه؟", reply_markup=stats_keyboard())
-    else:
-        await msg.reply_text(
-            build_stats_text(msg.chat_id, period),
-            parse_mode=ParseMode.HTML,
-            reply_markup=stats_keyboard(),
-        )
+        return
+    text = (
+        build_stats_text_all(period)
+        if chat.type == "private"
+        else build_stats_text(msg.chat_id, period)
+    )
+    await msg.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=stats_keyboard())
 
 
 async def on_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -476,18 +580,24 @@ async def on_stats_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def on_stats_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    if not _stats_allowed(query.from_user):
+    chat = query.message.chat
+    private = chat.type == "private"
+    allowed = (
+        _private_stats_allowed(query.from_user)
+        if private
+        else _stats_allowed(query.from_user)
+    )
+    if not allowed:
         await query.answer("فقط مدیر ربات می‌تواند آمار را ببیند.", show_alert=True)
         return
     period = (query.data or "").split("|")[-1]
-    if period not in PERIOD_TITLES or not _chat_allowed(query.message.chat.id):
+    if period not in PERIOD_TITLES or (not private and not _chat_allowed(chat.id)):
         await query.answer()
         return
+    text = build_stats_text_all(period) if private else build_stats_text(chat.id, period)
     try:
         await query.edit_message_text(
-            build_stats_text(query.message.chat.id, period),
-            parse_mode=ParseMode.HTML,
-            reply_markup=stats_keyboard(),
+            text, parse_mode=ParseMode.HTML, reply_markup=stats_keyboard()
         )
     except BadRequest as e:
         if "not modified" not in str(e).lower():
@@ -508,6 +618,11 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error("خطا در پردازش آپدیت", exc_info=context.error)
 
 
+# ----------------------------------------------------------------------------
+# اجرای ربات
+# ----------------------------------------------------------------------------
+
+
 def main() -> None:
     token = os.environ.get("BOT_TOKEN", "").strip()
     if not token:
@@ -517,7 +632,8 @@ def main() -> None:
     if STATS_ADMIN_IDS:
         logger.info("آمار فقط برای %d کاربر مجاز است", len(STATS_ADMIN_IDS))
     else:
-        logger.warning("STATS_ADMIN_IDS تنظیم نشده؛ آمار برای همه‌ی اعضا باز است.")
+        logger.warning("STATS_ADMIN_IDS تنظیم نشده؛ آمار گروه برای همه‌ی اعضا باز است.")
+
     app = Application.builder().token(token).build()
     app.add_handler(CommandHandler("myid", on_myid))
     app.add_handler(CommandHandler(["stats", "daily", "weekly", "monthly"], on_stats_command))
@@ -533,7 +649,8 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(on_stats_button, pattern=r"^st\|"))
     app.add_handler(
         MessageHandler(
-            (filters.PHOTO | filters.Document.IMAGE) & filters.UpdateType.MESSAGE,
+            (filters.PHOTO | filters.Document.IMAGE)
+            & (filters.UpdateType.MESSAGE | filters.UpdateType.CHANNEL_POST),
             on_chart,
         )
     )
@@ -541,7 +658,10 @@ def main() -> None:
     app.add_error_handler(on_error)
 
     logger.info("ربات در حال اجراست...")
-    app.run_polling(allowed_updates=["message", "callback_query"], bootstrap_retries=-1)
+    app.run_polling(
+        allowed_updates=["message", "channel_post", "callback_query"],
+        bootstrap_retries=-1,
+    )
 
 
 if __name__ == "__main__":
